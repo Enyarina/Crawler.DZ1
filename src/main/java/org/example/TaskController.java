@@ -1,5 +1,8 @@
 package org.example;
 
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ConnectionFactory;
 import org.apache.http.HttpEntity;
 import org.apache.http.client.CookieStore;
 import org.apache.http.client.config.RequestConfig;
@@ -13,13 +16,18 @@ import org.apache.logging.log4j.Logger;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
-import com.rabbitmq.client.Channel;
-import com.rabbitmq.client.Connection;
-import com.rabbitmq.client.ConnectionFactory;
-
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeoutException;
+import com.fasterxml.jackson.databind.ObjectWriter;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.elasticsearch.client.Client;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.transport.TransportAddress;
+import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.transport.client.PreBuiltTransportClient;
+import java.net.InetAddress;
+
 
 public class TaskController {
     private static Logger log = LogManager.getLogger();
@@ -36,7 +44,6 @@ public class TaskController {
         builder = HttpClientBuilder.create().setDefaultCookieStore(httpCookieStore);
         client = builder.build();
         this.server = _server;
-
 
         factory.setUsername("rabbitmq");
         factory.setPassword("rabbitmq");
@@ -109,10 +116,13 @@ public class TaskController {
         return doc;
     }
 
-    public String GetPage(String link) {
+    public String GetPage(String link) throws IOException, TimeoutException {
         Document ndoc = getUrl(link);
         String text = "";
         if (ndoc != null) {
+            Connection conn = factory.newConnection();
+            Channel channel = conn.createChannel();
+
             // The text of the publication
             String textPublication = ndoc.select("div.content-box").text();
             log.info("Текст публикации: " + textPublication);
@@ -131,11 +141,20 @@ public class TaskController {
 
             // Link to the page
             log.info("Ссылка на страницу: " + link);
+            //Создание очереди 2
+
+            Json json = new Json(header, textPublication, authorPublication, link, timePublication);
+            ObjectWriter ow = new ObjectMapper().writer().withDefaultPrettyPrinter();
+            String json_complete = ow.writeValueAsString(json);
+            channel.basicPublish("", Main.queueSecond, null, json_complete.getBytes());
+
+            channel.close();
+            conn.close();
         }
         return text;
     }
 
-    void produce() throws IOException, TimeoutException {
+    void produce() throws IOException, TimeoutException, InterruptedException {
         Document doc = getUrl(Main.site);
         String title;
         if (doc != null) {
@@ -150,19 +169,33 @@ public class TaskController {
         Channel channel = conn.createChannel();
         while (true) {
             try {
-                if (channel.messageCount(Main.queueName) == 0) continue;
-                String url = new String(channel.basicGet(Main.queueName, true).getBody(), StandardCharsets.UTF_8);
+                if (channel.messageCount(Main.queueFirst) == 0) continue;
+                String url = new String(channel.basicGet(Main.queueFirst, true).getBody(), StandardCharsets.UTF_8);
 
                 if (url != null)
                     GetPage(url);
                 notify();
-            } catch (IndexOutOfBoundsException e) {
+            }
+            catch (IndexOutOfBoundsException e) {
                 wait();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
             }
         }
     }
+    void sendBD() throws IOException, TimeoutException {
+        while (true){
+            Connection conn = factory.newConnection();
+            Channel channel = conn.createChannel();
 
-    ;
+            if (channel.messageCount(Main.queueSecond) == 0) continue;
+            String json = new String(channel.basicGet(Main.queueSecond, true).getBody(), StandardCharsets.UTF_8);
+            Client client = new PreBuiltTransportClient(
+                    Settings.builder().put("cluster.name","docker-cluster").build())
+                    .addTransportAddress(new TransportAddress(InetAddress.getByName("localhost"), 9300));
+            String sha256hex = org.apache.commons.codec.digest.DigestUtils.sha256Hex(json);
+            client.prepareIndex("crawler", "_doc", sha256hex).setSource(json, XContentType.JSON).get();
+            channel.close();
+            conn.close();
+        }
+    }
+
 }

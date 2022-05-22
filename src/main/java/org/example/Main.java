@@ -17,22 +17,30 @@ public class Main {
     private static org.example.TaskController taskController;
     protected static String site = "https://spmiyaki.ru/";
 
-    protected static String queueName = "myQueue";
+    protected static String queueFirst = "myQueue";
+    protected static String queueSecond = "myQueueSecond";
 
-    static public void ParseNews(Document doc, String url) {
+    static public void ParseNews(Document doc, String url) throws InterruptedException, IOException, TimeoutException {
         Elements news = doc.getElementsByClass("theiaStickySidebar").select("div[class*=news_loop_img]");
+        Connection conn = taskController.factory.newConnection();
+        Channel channel = conn.createChannel();
         for (Element element : news) {
             try {
+
                 Element eTitle = element.child(0);
                 String link = eTitle.attr("href");
                 String text = taskController.GetPage(link);
+                channel.basicPublish("", Main.queueFirst, null, link.getBytes());
 
                 log.info(text);
+
 
             } catch (Exception e) {
                 log.error(e);
             }
         }
+        channel.close();
+        conn.close();
 
         return;
     }
@@ -45,12 +53,13 @@ public class Main {
         factory.setVirtualHost("/");
         factory.setHost("127.0.0.1");
         factory.setPort(5672);
-        boolean durable = true;
+        boolean durable = false;
 
         Connection conn = factory.newConnection();
         Channel channel = conn.createChannel();
 
-        channel.queueDeclare(queueName, durable, false, false, null);
+        channel.queueDeclare(queueFirst, durable, false, false, null);
+        channel.queueDeclare(queueSecond, durable, false, false, null);
 
         channel.close();
         conn.close();
@@ -61,10 +70,9 @@ public class Main {
             public void run() {
                 try {
                     taskController.produce();
-                } catch (TimeoutException e) {
+                }
+                catch (InterruptedException | IOException | TimeoutException e) {
                     e.printStackTrace();
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
                 }
             }
         });
@@ -74,22 +82,34 @@ public class Main {
             public void run() {
                 try {
                     taskController.consume();
-                } catch (TimeoutException e) {
+                }
+                catch (InterruptedException | IOException | TimeoutException e) {
                     e.printStackTrace();
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
                 }
             }
         });
-        // Start both threads
+
+        // Create send to bd
+        Thread t3 = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    taskController.sendBD();
+                }
+                catch (IOException | TimeoutException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
+        // Start threads
         t1.start();
         t2.start();
+        t3.start();
 
-        // t1 finishes before t2
         t1.join();
         t2.join();
+        t3.join();
 
 
         return;
