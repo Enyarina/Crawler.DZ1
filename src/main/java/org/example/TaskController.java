@@ -192,7 +192,7 @@ public class TaskController {
                     Settings.builder().put("cluster.name","docker-cluster").build())
                     .addTransportAddress(new TransportAddress(InetAddress.getByName("localhost"), 9300));
             String sha256hex = org.apache.commons.codec.digest.DigestUtils.sha256Hex(json);
-            client.prepareIndex("crawler", "_doc", sha256hex).setSource(json, XContentType.JSON).get();
+            client.prepareIndex("CrawlerDz", "_doc", sha256hex).setSource(json, XContentType.JSON).get();
             channel.close();
             conn.close();
         }
