@@ -10,6 +10,7 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.io.IOException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 public class Main {
@@ -102,14 +103,31 @@ public class Main {
             }
         });
 
+
+        // Create request to Elasticsearch
+        Thread t4 = new Thread(new Runnable() {
+            @Override
+            public void run()
+            {
+                try {
+                    taskController.request();
+                }
+                catch (ExecutionException | InterruptedException | IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
         // Start threads
         t1.start();
         t2.start();
         t3.start();
+        t4.start();
 
         t1.join();
         t2.join();
         t3.join();
+        t4.join();
 
 
         return;
